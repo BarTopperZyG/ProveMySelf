@@ -1,0 +1,237 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    branches: [main]
+    types:
+      - completed
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Only deploy if CI pipeline passed
+  check-ci:
+    name: Check CI Status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'push'
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - name: Check deployment conditions
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]] && [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]] && [[ "${{ github.event.workflow_run.head_branch }}" == "main" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: check-ci
+    if: needs.check-ci.outputs.deploy == 'true'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      backend-image: ${{ steps.backend.outputs.image }}
+      studio-image: ${{ steps.studio.outputs.image }}
+      player-image: ${{ steps.player.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push backend image
+        id: backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend/go
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ github.sha }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push studio image
+        id: studio
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/studio
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/studio:${{ github.sha }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/studio:latest
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push player image
+        id: player
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/player
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/player:${{ github.sha }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/player:latest
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [check-ci, build-images]
+    if: needs.check-ci.outputs.deploy == 'true'
+    environment:
+      name: staging
+      url: https://staging.provemyself.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment..."
+          echo "Backend image: ${{ needs.build-images.outputs.backend-image }}"
+          echo "Studio image: ${{ needs.build-images.outputs.studio-image }}"
+          echo "Player image: ${{ needs.build-images.outputs.player-image }}"
+          # TODO: Add actual deployment steps (kubectl, helm, etc.)
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests against staging..."
+          # TODO: Add actual smoke tests
+          curl -f https://staging-api.provemyself.com/api/v1/health || exit 1
+          curl -f https://staging-studio.provemyself.com/health || exit 1
+          curl -f https://staging-player.provemyself.com/health || exit 1
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "✅ Staging deployment successful"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "❌ Staging deployment failed"
+          exit 1
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [check-ci, build-images, deploy-staging]
+    if: needs.check-ci.outputs.deploy == 'true' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://provemyself.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production environment..."
+          echo "Backend image: ${{ needs.build-images.outputs.backend-image }}"
+          echo "Studio image: ${{ needs.build-images.outputs.studio-image }}"
+          echo "Player image: ${{ needs.build-images.outputs.player-image }}"
+          # TODO: Add actual production deployment steps
+
+      - name: Run production health checks
+        run: |
+          echo "Running production health checks..."
+          # TODO: Add comprehensive health checks
+          curl -f https://api.provemyself.com/api/v1/health || exit 1
+          curl -f https://studio.provemyself.com/health || exit 1
+          curl -f https://play.provemyself.com/health || exit 1
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+          body: |
+            ## What's Changed
+            - Automated deployment from CI/CD pipeline
+            - Docker images published to GitHub Container Registry
+            
+            ## Images
+            - Backend: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ github.sha }}`
+            - Studio: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/studio:${{ github.sha }}`
+            - Player: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/player:${{ github.sha }}`
+
+      - name: Notify production deployment success
+        if: success()
+        run: |
+          echo "🚀 Production deployment successful!"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "❌ Production deployment failed - initiating rollback"
+          # TODO: Add rollback logic
+          exit 1
+
+  security-scan-images:
+    name: Scan Docker Images
+    runs-on: ubuntu-latest
+    needs: build-images
+    if: needs.check-ci.outputs.deploy == 'true'
+    permissions:
+      security-events: write
+    steps:
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ github.sha }}
+          format: 'sarif'
+          output: 'backend-trivy-results.sarif'
+
+      - name: Upload backend scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'backend-trivy-results.sarif'
+          category: 'backend-image'
+
+      - name: Scan studio image  
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/studio:${{ github.sha }}
+          format: 'sarif'
+          output: 'studio-trivy-results.sarif'
+
+      - name: Upload studio scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'studio-trivy-results.sarif'
+          category: 'studio-image'

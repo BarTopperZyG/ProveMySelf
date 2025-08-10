@@ -1,0 +1,24 @@
+{
+  "name": "@provemyself/openapi-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated TypeScript client for ProveMySelf API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "generate": "openapi-typescript ../openapi/openapi.yaml -o src/types.ts && tsc",
+    "build": "tsc",
+    "clean": "rm -rf dist/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ky": "^1.2.3"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^6.7.4",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist"
+  ]
+}
