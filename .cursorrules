@@ -1,0 +1,362 @@
+# ProveMySelf — Project-Specific .cursorrules
+
+<!--
+This file defines strict, repo-specific rules for AI-assisted code generation, following
+both the ProveMySelf project architecture and the "Awesome CursorRules" best practices.
+Place at the repo root.
+-->
+
+## 📜 Context
+ProveMySelf is a monorepo with a Go 1.22+ backend and a Next.js 14+ frontend.
+It uses npm workspaces for shared packages, OpenAPI for API contracts, and enforces
+strict naming, testing, and documentation rules.
+
+---
+
+## 🏗 Project Structure (Strict)
+
+### Layout
+```
+ProveMySelf/
+├── backend/go/          # Go 1.22+ backend API
+├── frontend/next/       # Next.js 14+ frontend
+├── packages/
+│   ├── schemas/         # Zod schemas (frontend/backend validation)
+│   ├── ui-tokens/       # Design tokens
+│   └── openapi-client/  # Generated TS client from openapi.yaml
+├── docs/                # Project documentation
+├── .github/workflows/   # CI/CD workflows
+├── Makefile             # Root build scripts (monorepo orchestration)
+└── package.json         # npm workspaces root
+```
+
+### Tech Stack
+- **Backend**: Go 1.22+, Chi router, PostgreSQL, structured logging
+- **Frontend**: Next.js 14+, React 18, TypeScript strict, Tailwind CSS, shadcn/ui
+- **Shared**: OpenAPI 3.0, Zod, npm workspaces
+
+---
+
+## 📋 Global Standards
+
+### Always
+- Use explicit types (`PascalCase` for types, `camelCase` for vars/funcs, `kebab-case` for files, `SCREAMING_SNAKE_CASE` for constants)
+- Small, focused functions; single responsibility
+- Separate pure logic from I/O
+- Write happy-path + edge-case tests (≥70% coverage in core packages)
+- Update README(s) when adding/changing features or public APIs
+- Document exported functions/types and complex logic
+- Provide examples for public APIs/components
+- Keep PRs < 400 net LOC, single logical change
+
+### Never
+- Add dependencies without justification in PR + note in relevant README
+- Ship code without tests + docs
+- Hardcode secrets/keys/URLs (use env vars)
+- Use `fmt.Println` in production
+- Overuse prop drilling — prefer Context or Zustand
+
+---
+
+## 🔧 Backend (Go) Rules
+
+### Folder Structure
+```
+backend/go/
+├── cmd/api/main.go
+├── internal/http/    # Handlers, middleware
+├── internal/core/    # Business logic
+├── internal/store/   # Data access layer
+├── internal/types/   # DTOs, envelopes, error codes
+├── internal/config/  # Config mgmt
+├── pkg/             # Reusable helpers
+└── test/            # Integration/e2e helpers
+```
+
+### Standards
+- **Router**: Chi
+- **Config**: env vars only
+- **Context**: Always use timeouts (default 5s in handlers)
+- **Errors**: `%w`, sentinel errors, log once at edges
+- **Error envelope**:
+  ```json
+  {
+    "error": {
+      "code": "some_code",
+      "message": "A descriptive message",
+      "details": "<optional>"
+    }
+  }
+  ```
+- **Logging**: zerolog/slog (structured)
+- **Validation**: go-playground/validator
+- **Security**: CORS, rate limiting, input sanitization, panic recovery middleware
+- **API**: /api/v1 versioning
+- **OpenAPI**: generated from Go comments → packages/openapi/openapi.yaml
+
+### Testing
+- **Unit**: testing + testify, table-driven, mock externals
+- **Integration**: testcontainers for PostgreSQL
+- **Coverage**: core packages ≥ 70%
+
+### Makefile Targets
+`make dev`, `make test`, `make test-int`, `make lint`, `make fmt`, `make openapi`, `make all`
+
+### Handler Checklist
+- DTOs in internal/types (with validation tags)
+- Validate input, call core service
+- Map domain errors to HTTP codes + error envelope
+- Add OpenAPI doc comments
+
+---
+
+## 🎨 Frontend (Next.js) Rules
+
+### Folder Structure
+```
+frontend/next/
+├── app/(routes)/...   # App Router pages
+├── components/...     # Reusable components
+├── lib/...           # Utilities and helpers
+├── styles/...        # Global styles
+└── test/...          # Test files
+```
+
+### Standards
+- **Framework**: Next.js App Router, TypeScript strict
+- **Styling**: Tailwind CSS + shadcn/ui
+- **Components**: Server Components by default, Client Components only when interactivity needed
+- **State**: local/server preferred; Zustand for client state
+- **Forms**: React Hook Form + Zod
+- **Testing**: Vitest + React Testing Library + jest-dom
+- **Lint**: ESLint (next/core-web-vitals) + Prettier
+
+### Accessibility
+- WCAG 2.2 AA compliance
+- Automated a11y checks (axe-core) for interactive components
+- Manual keyboard navigation tests
+- Avoid global CSS except Tailwind base; use packages/ui-tokens
+
+### Component Checklist
+- Typed prop interface
+- JSDoc with usage example
+- Tests for rendering + a11y roles/labels
+- `data-testid` for testing hooks
+- Keyboard navigation tested
+
+---
+
+## 🔗 Cross-Cutting Concerns
+
+### Contracts
+- `packages/openapi/openapi.yaml` is the single source of truth
+- Frontend client: generated via openapi-typescript into packages/openapi-client
+- Zod schemas in packages/schemas kept in sync with backend types
+
+### Documentation
+- **Root README**: quick start, scripts, ASCII architecture, env vars, testing, deployment
+- **App-level README**: local run, troubleshooting
+- **Significant features**: /docs/*.md
+- **API docs**: OpenAPI with examples
+
+### Testing
+- Mandatory unit tests for Go core + handlers, and React components with logic
+- Avoid snapshots for dynamic UIs
+- Use fixtures/builders for test data
+- Accessibility tests required for interactive components
+
+---
+
+## 🚀 CI/CD
+
+### GitHub Actions
+- `.github/workflows/ci.yml` with separate parallel jobs: lint, typecheck, unit-tests, integration-tests
+- Upload coverage summary; fail on threshold drop
+- On main: build Docker images, publish OpenAPI, regenerate client
+- Run Trivy (or similar) scans on Docker images
+
+### Quality Gates
+- **Pre-commit**: gitleaks, golangci-lint, ESLint
+- **Dependabot**: weekly
+- **PRs**: require tests for non-trivial code, docs update for API change, lint/type check passing, ≥1 code owner approval
+
+---
+
+## 📝 Code Templates
+
+### Go HTTP Handler
+```go
+// backend/go/internal/http/quiz_create.go
+package http
+
+import (
+    "context"
+    "errors"
+    "net/http"
+    "time"
+
+    "github.com/go-chi/chi/v5"
+    "github.com/go-playground/validator/v10"
+    "github.com/rs/zerolog/log"
+
+    "project/internal/core"
+    "project/internal/types"
+)
+
+type QuizHandler struct {
+    service  *core.QuizService
+    validate *validator.Validate
+}
+
+func NewQuizHandler(s *core.QuizService, v *validator.Validate) *QuizHandler {
+    return &QuizHandler{service: s, validate: v}
+}
+
+func (h *QuizHandler) CreateQuiz(w http.ResponseWriter, r *http.Request) {
+    ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+    defer cancel()
+
+    var req types.CreateQuizRequest
+    if err := DecodeJSON(r, &req); err != nil {
+        log.Ctx(ctx).Error().Err(err).Msg("failed to decode request")
+        SendJSONError(w, http.StatusBadRequest, "invalid_request_body", "Invalid request body")
+        return
+    }
+
+    if err := h.validate.StructCtx(ctx, req); err != nil {
+        SendJSONError(w, http.StatusBadRequest, "validation_failed", "Validation failed", "details", err.Error())
+        return
+    }
+
+    quiz, err := h.service.Create(ctx, req.Title, req.Description)
+    if err != nil {
+        switch {
+        case errors.Is(err, core.ErrQuizTitleTooShort):
+            SendJSONError(w, http.StatusUnprocessableEntity, "title_too_short", "Quiz title is too short")
+        default:
+            SendJSONError(w, http.StatusInternalServerError, "internal_error", "Unexpected error")
+        }
+        return
+    }
+
+    SendJSONResponse(w, http.StatusCreated, types.QuizResponse{
+        ID: quiz.ID, Title: quiz.Title, Description: quiz.Description,
+    })
+}
+```
+
+### React Button Component
+```tsx
+// frontend/next/components/ui/Button.tsx
+import React from 'react';
+import { cn } from '@/lib/utils';
+
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
+  size?: 'default' | 'sm' | 'lg' | 'icon';
+  isLoading?: boolean;
+}
+
+/**
+ * @example
+ * <Button variant="default" size="lg">Click me</Button>
+ */
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = 'default', size = 'default', isLoading, children, ...props }, ref) => (
+    <button
+      className={cn(
+        'inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'disabled:pointer-events-none disabled:opacity-50',
+        variant === 'default' && 'bg-primary text-primary-foreground hover:bg-primary/90',
+        size === 'default' && 'h-10 px-4 py-2',
+        className
+      )}
+      ref={ref}
+      disabled={isLoading}
+      {...props}
+    >
+      {isLoading && <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />}
+      {children}
+    </button>
+  )
+);
+
+Button.displayName = 'Button';
+```
+
+---
+
+## 🤖 AI Assistance Guidelines
+
+### When Generating or Modifying Code
+- ✅ File is in correct path per project structure
+- ✅ Naming conventions followed
+- ✅ Error handling matches backend envelope
+- ✅ Tests provided or updated
+- ✅ Documentation updated
+- ✅ Lint/type check passes
+- ✅ Accessibility verified (frontend)
+- ✅ API contract (openapi.yaml) updated if needed
+
+### Code Review Checklist
+- [ ] Follows project structure and naming conventions
+- [ ] Includes appropriate error handling
+- [ ] Has tests for new functionality
+- [ ] Documentation is updated
+- [ ] Code passes linting and type checks
+- [ ] Accessibility considerations addressed (frontend)
+- [ ] API contracts updated if needed
+- [ ] Security best practices followed
+- [ ] Performance implications considered
+
+---
+
+## 🎯 Domain-Specific Rules (ProveMySelf)
+
+### Quiz Platform Architecture
+- **Quiz Bundle**: Always produce `ui.json` (Adaptive Cards) + `quiz.json` (QTI 3.0) + assets
+- **Declarative UI**: Use Adaptive Cards schema for portable quiz rendering
+- **Assessment Standards**: Follow IMS QTI 3.0 for interoperable quiz semantics
+- **Analytics**: Emit xAPI statements (actor-verb-object-result) to configurable LRS
+- **Binding Model**: UI controls map to QTI interactions via `data: { itemId, responseKey }`
+
+### Studio Component Types
+- **Canvas Editor**: Drag-drop with grid/snapping, real-time preview
+- **Block Library**: Title, Media, Choice, MultiChoice, TextEntry, Ordering, Hotspot, ImageSelect
+- **Property Inspector**: JSON Forms/react-jsonschema-form `uiSchema` for rapid authoring
+- **Export Pipeline**: Compose declarative artifacts with asset bundling
+
+### Player Runtime
+- **Adaptive Cards Renderer**: Map UI elements to React components
+- **Response Collection**: Bind form inputs to QTI response processing
+- **Offline Support**: PWA with asset caching, sync on reconnect
+- **Scoring Engine**: QTI-compatible rules with deterministic results
+
+### Collaboration Features
+- **Real-time Co-editing**: Yjs CRDT with multi-cursor presence
+- **Version Control**: Snapshot/branching for quiz iterations
+- **Comments System**: Contextual feedback on quiz elements
+- **Template Gallery**: Pre-themed quiz starting points
+
+### Standards Compliance
+- **QTI 3.0**: Use `qti-assessment-item` and `qti-assessment-test` structures
+- **Adaptive Cards**: Version 1.5+ with host-specific action extensions
+- **xAPI**: Emit to any LRS endpoint with proper authentication
+- **WCAG 2.2 AA**: Mandatory for all interactive quiz elements
+- **LTI 1.3**: Integration endpoint for LMS compatibility
+
+### File Naming Conventions
+- **Quiz blocks**: `components/studio/blocks/choice-block.tsx`
+- **Player renderers**: `components/player/renderers/choice-renderer.tsx`
+- **Core services**: `internal/core/quiz-service.go`, `internal/core/attempt-service.go`
+- **QTI processors**: `internal/qti/item-processor.go`, `internal/qti/score-processor.go`
+
+### Environment Variables
+- `DATABASE_URL`: PostgreSQL connection string
+- `STORAGE_URL`: Object storage for quiz assets
+- `LRS_ENDPOINT`: xAPI Learning Record Store URL
+- `LRS_AUTH_TOKEN`: xAPI authentication token
+- `YLOG_PROVIDER_URL`: Real-time collaboration service
+
+
