@@ -1,0 +1,59 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  - repo: https://github.com/zricethezav/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: go-fmt
+        entry: gofmt
+        args: [-w]
+        language: system
+        files: \.go$
+        
+      - id: go-imports
+        name: go-imports
+        entry: goimports
+        args: [-w]
+        language: system
+        files: \.go$
+        
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint
+        args: [run, --fix]
+        language: system
+        files: \.go$
+        pass_filenames: false
+        
+      - id: prettier
+        name: prettier
+        entry: prettier
+        args: [--write]
+        language: node
+        files: \.(ts|tsx|js|jsx|json|md|yaml|yml)$
+        additional_dependencies:
+          - prettier@3.2.5
+          
+      - id: eslint
+        name: eslint
+        entry: eslint
+        args: [--fix]
+        language: node
+        files: \.(ts|tsx|js|jsx)$
+        additional_dependencies:
+          - eslint@8.57.0

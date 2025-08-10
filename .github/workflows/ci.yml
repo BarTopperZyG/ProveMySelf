@@ -1,0 +1,353 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.22'
+  NODE_VERSION: '20'
+  PNPM_VERSION: '8'
+
+jobs:
+  # Quality gates and validation
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Install dependencies
+        run: make install
+        
+      - name: Run Go linters
+        run: |
+          cd backend/go
+          go vet ./...
+          # golangci-lint run --timeout=5m
+          
+      - name: Run frontend linters
+        run: make lint
+        
+      - name: Check formatting
+        run: |
+          cd backend/go && gofmt -d . | tee /tmp/gofmt.out && [ ! -s /tmp/gofmt.out ]
+          pnpm prettier --check "frontend/**/*.{ts,tsx,js,jsx,json,md}"
+
+  typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Install dependencies
+        run: pnpm install
+        
+      - name: Build packages
+        run: pnpm --filter packages/* build
+        
+      - name: TypeScript type check
+        run: make typecheck
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Install dependencies
+        run: make install
+        
+      - name: Run Go unit tests
+        run: |
+          cd backend/go
+          go test -race -coverprofile=coverage.out -covermode=atomic ./...
+          
+      - name: Run frontend unit tests
+        run: |
+          pnpm --filter frontend/* test --coverage
+          
+      - name: Check Go coverage threshold
+        run: |
+          cd backend/go
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          echo "Coverage: ${COVERAGE}%"
+          if (( $(echo "${COVERAGE} < 70" | bc -l) )); then
+            echo "❌ Coverage ${COVERAGE}% is below minimum threshold of 70%"
+            exit 1
+          else
+            echo "✅ Coverage ${COVERAGE}% meets minimum threshold"
+          fi
+          
+      - name: Upload Go coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./backend/go/coverage.out
+          flags: backend
+          name: backend-coverage
+          
+      - name: Upload frontend coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          directory: ./frontend/
+          flags: frontend
+          name: frontend-coverage
+          
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_USER: testuser
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+          
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          
+      - name: Wait for services
+        run: |
+          timeout 60s bash -c 'until pg_isready -h localhost -p 5432 -U testuser; do sleep 2; done'
+          timeout 60s bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 2; done'
+          
+      - name: Run integration tests
+        run: |
+          cd backend/go
+          go test -tags=integration -v ./test/...
+        env:
+          DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
+          REDIS_URL: redis://localhost:6379
+          ENVIRONMENT: test
+
+  build:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Install dependencies
+        run: make install
+        
+      - name: Build backend
+        run: |
+          cd backend/go
+          CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o bin/api cmd/api/main.go
+          
+      - name: Build frontend applications
+        run: |
+          pnpm --filter frontend/* build
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            backend/go/bin/
+            frontend/*/dist/
+            frontend/*/.next/
+          retention-days: 7
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          languages: go,javascript
+          
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          
+      - name: Run Go mod security audit
+        run: |
+          cd backend/go
+          go list -json -deps ./... | nancy sleuth
+        continue-on-error: true
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Run npm audit
+        run: |
+          pnpm install
+          pnpm audit --audit-level high
+        continue-on-error: true
+
+  openapi-validation:
+    name: OpenAPI Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          
+      - name: Install dependencies
+        run: pnpm install
+        
+      - name: Validate OpenAPI specification
+        run: |
+          pnpm --filter @provemyself/openapi validate
+          
+      - name: Generate API client
+        run: |
+          pnpm --filter @provemyself/openapi-client generate
+          
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, unit-tests, integration-tests, build, security, dependency-check, openapi-validation]
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "TypeCheck: ${{ needs.typecheck.result }}"
+          echo "Unit Tests: ${{ needs.unit-tests.result }}"
+          echo "Integration Tests: ${{ needs.integration-tests.result }}"
+          echo "Build: ${{ needs.build.result }}"
+          echo "Security: ${{ needs.security.result }}"
+          echo "Dependency Check: ${{ needs.dependency-check.result }}"
+          echo "OpenAPI Validation: ${{ needs.openapi-validation.result }}"
+          
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.typecheck.result }}" != "success" ]] || \
+             [[ "${{ needs.unit-tests.result }}" != "success" ]] || \
+             [[ "${{ needs.integration-tests.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}" != "success" ]] || \
+             [[ "${{ needs.openapi-validation.result }}" != "success" ]]; then
+            echo "❌ Quality gate failed - required checks did not pass"
+            exit 1
+          else
+            echo "✅ Quality gate passed - all required checks successful"
+          fi

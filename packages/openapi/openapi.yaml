@@ -1,0 +1,851 @@
+openapi: 3.0.3
+info:
+  title: ProveMySelf API
+  description: AI-powered quiz platform API for creating and managing interactive assessments
+  version: 1.0.0
+  contact:
+    name: ProveMySelf API Support
+    email: api@provemyself.com
+  license:
+    name: MIT
+    
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Development server
+  - url: https://api.provemyself.com/v1
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Application health check
+      description: |
+        Returns the health status of the API service including dependent services.
+        Used for load balancer health checks and monitoring.
+      operationId: getHealth
+      tags:
+        - System
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: Healthy service
+                  value:
+                    status: healthy
+                    timestamp: "2024-01-01T12:00:00Z"
+                    version: "1.0.0"
+                    services:
+                      database: healthy
+                      storage: healthy
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unhealthy:
+                  summary: Service degraded
+                  value:
+                    error:
+                      code: "service_unavailable"
+                      message: "Service is currently unavailable"
+                      details: "Database connection failed"
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: |
+        Simple liveness probe for Kubernetes/Docker health checks.
+        Returns 200 if the application is running.
+      operationId: getLiveness
+      tags:
+        - System
+      responses:
+        '200':
+          description: Application is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "alive"
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: |
+        Readiness probe that checks all dependencies are available.
+        Returns 200 when ready to serve traffic, 503 when dependencies are unavailable.
+      operationId: getReadiness
+      tags:
+        - System
+      responses:
+        '200':
+          description: Application is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ready"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  checks:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: [healthy, unhealthy]
+                    example:
+                      database: "healthy"
+        '503':
+          description: Application is not ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "not_ready"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  checks:
+                    type: object
+                    additionalProperties:
+                      type: string
+
+  /metrics:
+    get:
+      summary: System metrics
+      description: |
+        Returns detailed system metrics including memory usage, garbage collection stats,
+        goroutine counts, and uptime information. Useful for monitoring and alerting.
+      operationId: getMetrics
+      tags:
+        - System
+      responses:
+        '200':
+          description: System metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemMetrics'
+
+  /projects:
+    get:
+      summary: List projects
+      description: |
+        Retrieve a paginated list of quiz projects. Projects are returned in descending order by creation date.
+        Authentication is optional - authenticated users see their own projects, anonymous users see public projects.
+      operationId: listProjects
+      tags:
+        - Projects
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of projects to return
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: offset
+          in: query
+          description: Number of projects to skip for pagination
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+        - name: search
+          in: query
+          description: Search term to filter projects by title or description
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+          example: "javascript quiz"
+        - name: tags
+          in: query
+          description: Comma-separated list of tags to filter projects
+          required: false
+          schema:
+            type: string
+            maxLength: 500
+          example: "javascript,beginner"
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+              examples:
+                success:
+                  summary: Successful project list
+                  value:
+                    projects:
+                      - id: "123e4567-e89b-12d3-a456-426614174000"
+                        title: "JavaScript Basics Quiz"
+                        description: "Test your knowledge of JavaScript fundamentals"
+                        tags: ["javascript", "beginner"]
+                        created_at: "2024-01-01T12:00:00Z"
+                        updated_at: "2024-01-01T12:00:00Z"
+                        published_at: "2024-01-01T13:00:00Z"
+                    total: 1
+                    limit: 20
+                    offset: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+          
+    post:
+      summary: Create project
+      description: Create a new quiz project
+      operationId: createProject
+      tags:
+        - Projects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+      responses:
+        '201':
+          description: Project created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /projects/{projectId}:
+    get:
+      summary: Get project
+      description: Retrieve a specific project by ID
+      operationId: getProject
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      summary: Update project
+      description: |
+        Update an existing project. All fields are required in the request body.
+        Only the project owner can update their projects.
+      operationId: updateProject
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectRequest'
+            examples:
+              update_example:
+                summary: Update project example
+                value:
+                  title: "Advanced JavaScript Quiz"
+                  description: "Updated description with more details"
+                  tags: ["javascript", "advanced", "es6"]
+      responses:
+        '200':
+          description: Project updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      summary: Delete project
+      description: |
+        Permanently delete a project. This action cannot be undone.
+        Only the project owner can delete their projects.
+      operationId: deleteProject
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '204':
+          description: Project deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /projects/{projectId}/publish:
+    post:
+      summary: Publish project
+      description: |
+        Mark a project as published, making it available to users.
+        A project can only be published once. Once published, the published_at
+        timestamp is set and cannot be changed.
+      operationId: publishProject
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Project published successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+              examples:
+                published:
+                  summary: Published project
+                  value:
+                    id: "123e4567-e89b-12d3-a456-426614174000"
+                    title: "JavaScript Basics Quiz"
+                    description: "Test your knowledge of JavaScript fundamentals"
+                    tags: ["javascript", "beginner"]
+                    created_at: "2024-01-01T12:00:00Z"
+                    updated_at: "2024-01-01T12:00:00Z"
+                    published_at: "2024-01-01T13:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Project already published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                already_published:
+                  summary: Already published
+                  value:
+                    error:
+                      code: "project_already_published"
+                      message: "Project is already published"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      description: Unique identifier for the project
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: "123e4567-e89b-12d3-a456-426614174000"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+          description: Overall health status
+        timestamp:
+          type: string
+          format: date-time
+          description: Health check timestamp
+        version:
+          type: string
+          description: API version
+          example: "1.0.0"
+        services:
+          type: object
+          description: Status of dependent services
+          properties:
+            database:
+              type: string
+              enum: [healthy, unhealthy]
+            storage:
+              type: string
+              enum: [healthy, unhealthy]
+              
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: "validation_failed"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Validation failed for the request"
+            details:
+              type: string
+              description: Additional error details
+              example: "Field 'title' is required but was not provided"
+
+    CreateProjectRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Project title
+          example: "My Awesome Quiz"
+        description:
+          type: string
+          maxLength: 1000
+          description: Project description
+          example: "A comprehensive quiz about web development"
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 10
+          description: Project tags for categorization
+          example: ["web", "javascript", "beginner"]
+
+    UpdateProjectRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Updated project title
+          example: "My Updated Quiz Title"
+        description:
+          type: string
+          maxLength: 1000
+          nullable: true
+          description: Updated project description
+          example: "An updated comprehensive quiz about web development"
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 10
+          description: Updated project tags for categorization
+          example: ["web", "javascript", "intermediate"]
+
+    ProjectResponse:
+      type: object
+      required:
+        - id
+        - title
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique project identifier
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        title:
+          type: string
+          description: Project title
+          example: "My Awesome Quiz"
+        description:
+          type: string
+          nullable: true
+          description: Project description
+          example: "A comprehensive quiz about web development"
+        tags:
+          type: array
+          items:
+            type: string
+          description: Project tags
+          example: ["web", "javascript", "beginner"]
+        created_at:
+          type: string
+          format: date-time
+          description: Project creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: Project last update timestamp
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Project publication timestamp
+
+    ProjectListResponse:
+      type: object
+      required:
+        - projects
+        - total
+        - limit
+        - offset
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectResponse'
+        total:
+          type: integer
+          description: Total number of projects
+          example: 42
+        limit:
+          type: integer
+          description: Maximum number of projects in this response
+          example: 20
+        offset:
+          type: integer
+          description: Number of projects skipped
+          example: 0
+
+    SystemMetrics:
+      type: object
+      required:
+        - uptime
+        - uptime_seconds
+        - timestamp
+        - version
+        - go_version
+        - num_goroutines
+        - memory
+        - garbage_collector
+        - system
+      properties:
+        uptime:
+          type: string
+          description: Human-readable uptime duration
+          example: "2h3m45s"
+        uptime_seconds:
+          type: number
+          format: float
+          description: Uptime in seconds
+          example: 7425.5
+        timestamp:
+          type: string
+          format: date-time
+          description: Current timestamp
+        version:
+          type: string
+          description: Application version
+          example: "0.1.0"
+        go_version:
+          type: string
+          description: Go runtime version
+          example: "go1.22.0"
+        num_goroutines:
+          type: integer
+          description: Current number of goroutines
+          example: 15
+        memory:
+          type: object
+          required:
+            - alloc_bytes
+            - alloc_mb
+            - total_alloc_bytes
+            - total_alloc_mb
+            - sys_bytes
+            - sys_mb
+            - num_gc
+          properties:
+            alloc_bytes:
+              type: integer
+              description: Currently allocated bytes
+              example: 2048576
+            alloc_mb:
+              type: number
+              format: float
+              description: Currently allocated megabytes
+              example: 1.95
+            total_alloc_bytes:
+              type: integer
+              description: Total allocated bytes over time
+              example: 10485760
+            total_alloc_mb:
+              type: number
+              format: float
+              description: Total allocated megabytes over time
+              example: 10.0
+            sys_bytes:
+              type: integer
+              description: System memory bytes
+              example: 4194304
+            sys_mb:
+              type: number
+              format: float
+              description: System memory megabytes
+              example: 4.0
+            num_gc:
+              type: integer
+              description: Number of garbage collection runs
+              example: 42
+        garbage_collector:
+          type: object
+          required:
+            - last_gc
+            - next_gc_bytes
+            - pause_total_ns
+            - num_gc
+            - gc_cpu_percent
+          properties:
+            last_gc:
+              type: string
+              format: date-time
+              description: Last garbage collection timestamp
+            next_gc_bytes:
+              type: integer
+              description: Target heap size for next GC
+              example: 4194304
+            pause_total_ns:
+              type: integer
+              description: Total GC pause time in nanoseconds
+              example: 1000000
+            num_gc:
+              type: integer
+              description: Number of completed GC cycles
+              example: 42
+            gc_cpu_percent:
+              type: number
+              format: float
+              description: GC CPU usage percentage
+              example: 0.1
+        system:
+          type: object
+          required:
+            - num_cpu
+            - num_cgo_call
+            - goos
+            - goarch
+          properties:
+            num_cpu:
+              type: integer
+              description: Number of CPU cores
+              example: 8
+            num_cgo_call:
+              type: integer
+              description: Number of CGO calls
+              example: 0
+            goos:
+              type: string
+              description: Operating system
+              example: "linux"
+            goarch:
+              type: string
+              description: CPU architecture
+              example: "amd64"
+
+    ValidationErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - errors
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: "validation_failed"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Request validation failed"
+            errors:
+              type: array
+              items:
+                type: object
+                required:
+                  - field
+                  - tag
+                  - message
+                properties:
+                  field:
+                    type: string
+                    description: Field that failed validation
+                    example: "title"
+                  tag:
+                    type: string
+                    description: Validation tag that failed
+                    example: "required"
+                  message:
+                    type: string
+                    description: Human-readable validation error message
+                    example: "title is required"
+
+  responses:
+    BadRequest:
+      description: Bad request - invalid input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: "invalid_request_body"
+              message: "Invalid request body"
+
+    Unauthorized:
+      description: Unauthorized - authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: "unauthorized"
+              message: "Authentication required"
+
+    Forbidden:
+      description: Forbidden - insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: "forbidden"
+              message: "You do not have permission to access this resource"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: "resource_not_found"
+              message: "The requested resource was not found"
+
+    ValidationError:
+      description: Validation error - invalid input data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+          examples:
+            single_field:
+              summary: Single field validation error
+              value:
+                error:
+                  code: "validation_failed"
+                  message: "Request validation failed"
+                  errors:
+                    - field: "title"
+                      tag: "required"
+                      message: "title is required"
+            multiple_fields:
+              summary: Multiple field validation errors
+              value:
+                error:
+                  code: "validation_failed"
+                  message: "Request validation failed"
+                  errors:
+                    - field: "title"
+                      tag: "min"
+                      message: "title must be at least 1 characters"
+                    - field: "description"
+                      tag: "max"
+                      message: "description cannot exceed 1000 characters"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: "internal_error"
+              message: "An unexpected error occurred"
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: System
+    description: System health and status endpoints
+  - name: Projects
+    description: Quiz project management endpoints
