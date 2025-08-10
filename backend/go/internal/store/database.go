@@ -125,6 +125,54 @@ func (d *Database) Migrate(ctx context.Context) error {
 		return fmt.Errorf("failed to create projects updated_at trigger: %w", err)
 	}
 
+	// Create items table
+	createItemsTable := `
+		CREATE TABLE IF NOT EXISTS items (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+			type VARCHAR(50) NOT NULL CHECK (type IN ('title', 'media', 'choice', 'multi_choice', 'text_entry', 'ordering', 'hotspot')),
+			title VARCHAR(500) NOT NULL CHECK (char_length(title) > 0),
+			content JSONB DEFAULT '{}'::jsonb,
+			position INTEGER NOT NULL CHECK (position >= 0),
+			required BOOLEAN DEFAULT false,
+			points INTEGER CHECK (points IS NULL OR (points >= 0 AND points <= 1000)),
+			explanation TEXT,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			UNIQUE(project_id, position)
+		);
+	`
+
+	if _, err := d.db.ExecContext(ctx, createItemsTable); err != nil {
+		return fmt.Errorf("failed to create items table: %w", err)
+	}
+
+	// Create indexes for items
+	createItemsIndexes := `
+		CREATE INDEX IF NOT EXISTS idx_items_project_position 
+		ON items (project_id, position ASC);
+		
+		CREATE INDEX IF NOT EXISTS idx_items_created_at 
+		ON items (created_at DESC);
+	`
+
+	if _, err := d.db.ExecContext(ctx, createItemsIndexes); err != nil {
+		return fmt.Errorf("failed to create items indexes: %w", err)
+	}
+
+	// Create trigger for items
+	createItemsUpdatedAtTrigger := `
+		DROP TRIGGER IF EXISTS update_items_updated_at ON items;
+		CREATE TRIGGER update_items_updated_at
+			BEFORE UPDATE ON items
+			FOR EACH ROW
+			EXECUTE FUNCTION update_updated_at_column();
+	`
+
+	if _, err := d.db.ExecContext(ctx, createItemsUpdatedAtTrigger); err != nil {
+		return fmt.Errorf("failed to create items updated_at trigger: %w", err)
+	}
+
 	log.Info().Msg("database migrations completed successfully")
 	return nil
 }

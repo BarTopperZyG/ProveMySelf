@@ -55,9 +55,11 @@ func main() {
 
 	// Initialize stores
 	projectStore := store.NewProjectStore(database)
+	itemStore := store.NewItemStore(database)
 
 	// Initialize services
 	projectService := core.NewProjectService(projectStore)
+	itemService := core.NewItemService(itemStore, projectStore)
 
 	// Initialize middleware
 	loggingMiddleware := middleware.NewLoggingMiddleware()
@@ -68,6 +70,7 @@ func main() {
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(database)
 	projectHandler := handlers.NewProjectHandler(projectService, validate)
+	itemHandler := handlers.NewItemHandler(itemService, validate)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -108,6 +111,19 @@ func main() {
 			r.Put("/{projectId}", projectHandler.UpdateProject)
 			r.Delete("/{projectId}", projectHandler.DeleteProject)
 			r.Post("/{projectId}/publish", projectHandler.PublishProject)
+
+			// Items nested under projects
+			r.Route("/{projectId}/items", func(r chi.Router) {
+				r.Get("/", itemHandler.ListItems)
+				r.Post("/", itemHandler.CreateItem)
+				r.Get("/{itemId}", itemHandler.GetItem)
+				r.Put("/{itemId}", itemHandler.UpdateItem)
+				r.Delete("/{itemId}", itemHandler.DeleteItem)
+				
+				// Bulk operations and position management
+				r.Post("/bulk", itemHandler.BulkCreateItems)
+				r.Put("/positions", itemHandler.UpdateItemPositions)
+			})
 		})
 	})
 
